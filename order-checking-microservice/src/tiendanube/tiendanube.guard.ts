@@ -4,6 +4,7 @@ import { validate } from 'class-validator';
 import axios from 'axios';
 import Redis from 'ioredis';
 import { AccessTokenResponseDto } from './access-token.dto';
+import { MessagePattern } from '@nestjs/microservices';
 
 @Injectable()
 export class TiendanubeGuard implements CanActivate {
@@ -15,10 +16,10 @@ export class TiendanubeGuard implements CanActivate {
     this.redisClient = injectedRedisClient;
   }
 
+  @MessagePattern('check-orders')
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    console.log(request);
-    const { client_id, client_secret, code } = request;
+    const { client_id, client_secret, code, store } = request;
 
     // Request data validation (DTO)
     const tiendanubeDto = new TiendanubeAccessTokenRequestDto();
@@ -32,42 +33,22 @@ export class TiendanubeGuard implements CanActivate {
       throw new Error('Validation failed');
     }
 
-    const hashKey = 'access_tokens'; // Use the same common hash key
+    const hashKey = 'access_tokens'; 
 
-    // Check if the access token already exists in the Redis hash
-    const accessToken = await this.injectedRedisClient.hget(hashKey, client_id);
+    const accessToken = await this.injectedRedisClient.hget(hashKey, store);
 
-    if (accessToken) {
-      try {
-        // Access token exists in Redis, parse it as JSON
-        const parsedAccessToken = JSON.parse(accessToken);
-
-        // Use the parsed access token
-        request.accessToken = parsedAccessToken;
-        console.log(parsedAccessToken);
-        return true;
-      } catch (error) {
-        // Handle parsing error, e.g., log and return false
-        console.error('Error parsing access token:', error);
-        return false;
-      }
-    } else {
-      // Fetch a new access token from the external source
+    if (!accessToken) {
       const newAccessToken = await this.getAccessToken(tiendanubeDto);
-      const { access_token } = newAccessToken;
+      const { user_id } = newAccessToken;
 
-      // Store the new access token as a JSON string in Redis hash
       const jsonString = JSON.stringify(newAccessToken);
-      await this.injectedRedisClient.hset(hashKey, client_id, jsonString);
+      await this.injectedRedisClient.hset(hashKey, store, jsonString);
 
       // You can store the access token in the request or use it as needed
-      request.accessToken = newAccessToken;
-
-      console.log("This is the access token: ", newAccessToken);
-
-      return true;
+      request['token'] = newAccessToken;
     }
-
+    console.log("The request is processed: \n", request);
+    return true;
   }
 
   async getAccessToken(dto: TiendanubeAccessTokenRequestDto): Promise<AccessTokenResponseDto> {
